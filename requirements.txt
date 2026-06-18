@@ -1,3 +1,1 @@
-# 这个最小版本不需要额外依赖
-# 后面接 Scrapling 时再加：
-# scrapling[fetchers]
+scrapling[fetchers]

@@ -14,7 +14,7 @@ def save_json_to_drive(drive_dir: str, filename: str, data: dict) -> str:
     path = folder / filename
     path.write_text(
         json.dumps(data, ensure_ascii=False, indent=2),
-        encoding="utf-8"
+        encoding="utf-8",
     )
 
     print(f"已保存到 Google Drive: {path}")

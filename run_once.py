@@ -3,6 +3,7 @@ from zoneinfo import ZoneInfo
 import os
 
 from drive_io import save_json_to_drive, read_json_from_drive
+from ths_scraper import scrape_ths_probe
 
 
 def main():
@@ -13,28 +14,26 @@ def main():
 
     now = datetime.now(ZoneInfo("Asia/Shanghai"))
 
-    data = {
-        "source": "colab",
-        "storage": "google_drive",
-        "project": "a_stock_drive_pipeline",
-        "status": "ok",
-        "message": "Colab 运行 GitHub 代码，并成功把 JSON 保存到 Google Drive",
-        "created_at": now.isoformat(),
-        "items": [
-            {"name": "涨停统计", "value": 123},
-            {"name": "跌停统计", "value": 8},
-            {"name": "炸板统计", "value": 21}
-        ]
-    }
+    data = scrape_ths_probe()
 
-    filename = f"colab_drive_test_{now.strftime('%Y%m%d_%H%M%S')}.json"
+    filename = f"ths_scrapling_probe_{now.strftime('%Y%m%d_%H%M%S')}.json"
 
     saved_path = save_json_to_drive(drive_dir, filename, data)
 
     loaded = read_json_from_drive(saved_path)
 
     print("====== 读取验证成功 ======")
-    print(loaded)
+    print("保存文件:", saved_path)
+    print("抓取状态 ok:", loaded.get("ok"))
+    print("HTTP状态:", loaded.get("status"))
+    print("页面标题:", loaded.get("title"))
+    print("表格行数:", loaded.get("table_rows_count"))
+    print("链接样本数:", len(loaded.get("links_sample", [])))
+
+    if loaded.get("error"):
+        print("错误:", loaded.get("error"))
+
+    print("====== JSON 已写入 Google Drive ======")
 
 
 if __name__ == "__main__":
