@@ -3,11 +3,6 @@ from pathlib import Path
 
 
 def save_json_to_drive(drive_dir: str, filename: str, data: dict) -> str:
-    """
-    保存 JSON 到 Google Drive 挂载目录。
-    drive_dir 例子：
-    /content/drive/MyDrive/a_stock_data
-    """
     folder = Path(drive_dir)
     folder.mkdir(parents=True, exist_ok=True)
 

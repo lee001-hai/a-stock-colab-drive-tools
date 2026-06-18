@@ -1,26 +1,16 @@
-这是第二版：Colab + GitHub + Google Drive + Scrapling。
+这是第三版：同花顺 A 股行情正式结构化解析版。
 
-你现在只做一件事：
-把这些文件上传到你刚才那个 GitHub 仓库，覆盖同名文件。
+它会：
+1. Colab 从 GitHub 拉代码
+2. 安装 Scrapling
+3. 抓取 https://q.10jqka.com.cn/
+4. 解析 A 股表格字段
+5. 保存 JSON 到 Google Drive
 
-仓库：
-lee001-hai/a-stock-colab-drive-tools
-
-上传后打开：
-colab_drive_pipeline.ipynb
-
-从上到下运行。
-
-成功标志：
-最后会看到：
-
-已保存到 Google Drive: /content/drive/MyDrive/a_stock_data/ths_scrapling_probe_xxx.json
-====== 读取验证成功 ======
-抓取状态 ok: True 或 False
-HTTP状态: 200 或其他状态
-页面标题: xxx
+输出文件名类似：
+ths_a_stock_20260618_100000.json
 
 注意：
-这个版本是“同花顺页面探测版”，不是正式全量 A 股数据版。
-它先验证 Scrapling 能不能在 Colab 跑、能不能访问同花顺、能不能保存结果。
-跑通后再改 ths_scraper.py，把探测逻辑换成正式 A 股数据字段解析。
+当前版本只解析同花顺页面直接返回的第一页表格。
+不是全市场全量分页版。
+跑通后再做分页全量。

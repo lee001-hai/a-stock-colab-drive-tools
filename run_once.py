@@ -3,7 +3,7 @@ from zoneinfo import ZoneInfo
 import os
 
 from drive_io import save_json_to_drive, read_json_from_drive
-from ths_scraper import scrape_ths_probe
+from ths_scraper import scrape_ths_a_stock
 
 
 def main():
@@ -14,9 +14,9 @@ def main():
 
     now = datetime.now(ZoneInfo("Asia/Shanghai"))
 
-    data = scrape_ths_probe()
+    data = scrape_ths_a_stock()
 
-    filename = f"ths_scrapling_probe_{now.strftime('%Y%m%d_%H%M%S')}.json"
+    filename = f"ths_a_stock_{now.strftime('%Y%m%d_%H%M%S')}.json"
 
     saved_path = save_json_to_drive(drive_dir, filename, data)
 
@@ -27,8 +27,20 @@ def main():
     print("抓取状态 ok:", loaded.get("ok"))
     print("HTTP状态:", loaded.get("status"))
     print("页面标题:", loaded.get("title"))
-    print("表格行数:", loaded.get("table_rows_count"))
-    print("链接样本数:", len(loaded.get("links_sample", [])))
+    print("表头:", loaded.get("headers"))
+    print("股票数量:", loaded.get("count"))
+
+    stocks = loaded.get("stocks", [])
+    if stocks:
+        print("第一条股票:")
+        first = stocks[0]
+        print("代码:", first.get("code"))
+        print("名称:", first.get("name"))
+        print("现价:", first.get("price"))
+        print("涨跌幅%:", first.get("change_percent"))
+        print("成交额:", first.get("amount"))
+    else:
+        print("没有解析到股票数据")
 
     if loaded.get("error"):
         print("错误:", loaded.get("error"))

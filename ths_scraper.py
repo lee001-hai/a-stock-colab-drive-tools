@@ -1,7 +1,6 @@
 from datetime import datetime
 from zoneinfo import ZoneInfo
 import os
-from urllib.parse import urljoin
 
 from scrapling.fetchers import Fetcher
 
@@ -9,49 +8,107 @@ from scrapling.fetchers import Fetcher
 DEFAULT_THS_URL = "https://q.10jqka.com.cn/"
 
 
+FIELD_MAP = {
+    "序号": "rank",
+    "代码": "code",
+    "名称": "name",
+    "现价": "price",
+    "涨跌幅(%)": "change_percent",
+    "涨跌幅（%）": "change_percent",
+    "涨跌": "change_amount",
+    "涨速(%)": "speed_percent",
+    "涨速（%）": "speed_percent",
+    "换手(%)": "turnover_percent",
+    "换手（%）": "turnover_percent",
+    "量比": "volume_ratio",
+    "振幅(%)": "amplitude_percent",
+    "振幅（%）": "amplitude_percent",
+    "成交额": "amount",
+    "流通股": "float_shares",
+    "流通市值": "float_market_cap",
+    "市盈率": "pe",
+}
+
+
 def _clean_text(text: str) -> str:
-    return " ".join(str(text or "").split())
+    return " ".join(str(text or "").replace("\xa0", " ").split())
 
 
-def _texts(elements) -> list[str]:
-    values = []
-    for el in elements:
-        try:
-            txt = _clean_text(el.get_all_text())
-        except Exception:
-            txt = _clean_text(getattr(el, "text", ""))
-        if txt:
-            values.append(txt)
-    return values
+def _cell_text(cell) -> str:
+    try:
+        return _clean_text(cell.get_all_text())
+    except Exception:
+        return _clean_text(getattr(cell, "text", ""))
 
 
-def scrape_ths_probe(url: str | None = None, max_rows: int = 30) -> dict:
-    """
-    同花顺 Scrapling 探测版。
+def _normalize_header(value: str) -> str:
+    return _clean_text(value).replace(" ", "")
 
-    目标不是一次性把所有 A 股数据抓全，而是先验证：
-    1. Colab 能安装 Scrapling
-    2. Colab 能访问同花顺页面
-    3. 能解析页面标题、链接、表格
-    4. 能把结果保存到 Google Drive
 
-    后面确认页面结构后，再把这里改成正式字段解析。
-    """
+def _parse_table(page) -> tuple[list[str], list[dict]]:
+    rows = page.css("table tr")
+
+    header = []
+    records = []
+
+    for row in rows:
+        cells = [_cell_text(cell) for cell in row.css("th, td")]
+        cells = [x for x in cells if x != ""]
+
+        if not cells:
+            continue
+
+        # 第一行通常是表头
+        if not header and ("代码" in cells and "名称" in cells):
+            header = [_normalize_header(x) for x in cells]
+            continue
+
+        # 没拿到表头前，不解析数据
+        if not header:
+            continue
+
+        # 数据列数量不足，跳过
+        if len(cells) < min(5, len(header)):
+            continue
+
+        raw_record = {}
+        for idx, title in enumerate(header):
+            if idx < len(cells):
+                raw_record[title] = cells[idx]
+            else:
+                raw_record[title] = ""
+
+        record = {
+            "raw": raw_record
+        }
+
+        for cn_key, value in raw_record.items():
+            en_key = FIELD_MAP.get(cn_key, cn_key)
+            record[en_key] = value
+
+        # 强制保留核心字段
+        if record.get("code") and record.get("name"):
+            records.append(record)
+
+    return header, records
+
+
+def scrape_ths_a_stock(url: str | None = None) -> dict:
     target_url = url or os.environ.get("THS_URL") or DEFAULT_THS_URL
     fetched_at = datetime.now(ZoneInfo("Asia/Shanghai")).isoformat()
 
     result = {
         "ok": False,
-        "source": "ths_scrapling_probe",
+        "source": "ths_a_stock",
         "url": target_url,
         "fetched_at": fetched_at,
         "status": None,
         "title": "",
-        "table_rows_count": 0,
-        "table_rows_sample": [],
-        "links_sample": [],
+        "headers": [],
+        "count": 0,
+        "stocks": [],
         "error": "",
-        "note": "这是 Scrapling 探测版；先确认能抓到页面，再做正式 A 股字段解析。",
+        "note": "正式结构化版：解析同花顺 A 股行情中心当前页面表格。当前只抓页面直接返回的表格，不包含翻页全量。",
     }
 
     try:
@@ -74,39 +131,14 @@ def scrape_ths_probe(url: str | None = None, max_rows: int = 30) -> dict:
     except Exception:
         result["title"] = ""
 
-    # 抽取链接样本，帮助我们判断页面里有哪些可继续抓的 A 股入口
     try:
-        links = []
-        for a in page.css("a")[:50]:
-            text = _clean_text(a.get_all_text())
-            href = a.attrib.get("href", "") if hasattr(a, "attrib") else ""
-            if href:
-                links.append({
-                    "text": text,
-                    "href": urljoin(target_url, href),
-                })
-        result["links_sample"] = links[:20]
+        headers, stocks = _parse_table(page)
+        result["headers"] = headers
+        result["stocks"] = stocks
+        result["count"] = len(stocks)
     except Exception as exc:
-        result["links_error"] = f"{type(exc).__name__}: {exc}"
+        result["error"] = f"parse table failed: {type(exc).__name__}: {exc}"
+        return result
 
-    # 抽取 HTML 表格样本。如果这里为空，说明页面可能靠 JS/XHR 加载数据。
-    try:
-        rows = page.css("table tr")
-        result["table_rows_count"] = len(rows)
-
-        samples = []
-        for row in rows[:max_rows]:
-            cells = []
-            for cell in row.css("th, td"):
-                txt = _clean_text(cell.get_all_text())
-                if txt:
-                    cells.append(txt)
-            if cells:
-                samples.append(cells)
-
-        result["table_rows_sample"] = samples
-    except Exception as exc:
-        result["table_error"] = f"{type(exc).__name__}: {exc}"
-
-    result["ok"] = bool(result["status"] and int(result["status"]) < 400)
+    result["ok"] = bool(result["status"] and int(result["status"]) < 400 and result["count"] > 0)
     return result
