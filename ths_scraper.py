@@ -1,12 +1,29 @@
 from datetime import datetime
 from zoneinfo import ZoneInfo
 import os
+import time
 
 from scrapling.fetchers import Fetcher
 
 
-DEFAULT_THS_URL = "https://q.10jqka.com.cn/"
+BASE_URL = "https://q.10jqka.com.cn/index/index/board/all/field/zdf/order/desc/page/{page}/ajax/1/"
 
+DEFAULT_HEADERS = [
+    "序号",
+    "代码",
+    "名称",
+    "现价",
+    "涨跌幅(%)",
+    "涨跌",
+    "涨速(%)",
+    "换手(%)",
+    "量比",
+    "振幅(%)",
+    "成交额",
+    "流通股",
+    "流通市值",
+    "市盈率",
+]
 
 FIELD_MAP = {
     "序号": "rank",
@@ -45,10 +62,20 @@ def _normalize_header(value: str) -> str:
     return _clean_text(value).replace(" ", "")
 
 
-def _parse_table(page) -> tuple[list[str], list[dict]]:
-    rows = page.css("table tr")
+def _looks_like_stock_row(cells: list[str]) -> bool:
+    if len(cells) < 5:
+        return False
+    if not cells[0].isdigit():
+        return False
+    code = cells[1].strip()
+    if not code.isdigit():
+        return False
+    return 5 <= len(code) <= 6
 
-    header = []
+
+def _parse_page_table(page_obj) -> tuple[list[str], list[dict]]:
+    rows = page_obj.css("table tr")
+    headers = []
     records = []
 
     for row in rows:
@@ -58,87 +85,144 @@ def _parse_table(page) -> tuple[list[str], list[dict]]:
         if not cells:
             continue
 
-        # 第一行通常是表头
-        if not header and ("代码" in cells and "名称" in cells):
-            header = [_normalize_header(x) for x in cells]
+        if ("代码" in cells and "名称" in cells):
+            headers = [_normalize_header(x) for x in cells]
             continue
 
-        # 没拿到表头前，不解析数据
-        if not header:
+        if not _looks_like_stock_row(cells):
             continue
 
-        # 数据列数量不足，跳过
-        if len(cells) < min(5, len(header)):
-            continue
+        if not headers:
+            headers = DEFAULT_HEADERS
 
         raw_record = {}
-        for idx, title in enumerate(header):
-            if idx < len(cells):
-                raw_record[title] = cells[idx]
-            else:
-                raw_record[title] = ""
+        for idx, title in enumerate(headers):
+            raw_record[title] = cells[idx] if idx < len(cells) else ""
 
-        record = {
-            "raw": raw_record
-        }
-
+        record = {"raw": raw_record}
         for cn_key, value in raw_record.items():
             en_key = FIELD_MAP.get(cn_key, cn_key)
             record[en_key] = value
 
-        # 强制保留核心字段
         if record.get("code") and record.get("name"):
             records.append(record)
 
-    return header, records
+    return headers or DEFAULT_HEADERS, records
 
 
-def scrape_ths_a_stock(url: str | None = None) -> dict:
-    target_url = url or os.environ.get("THS_URL") or DEFAULT_THS_URL
+def scrape_ths_a_stock_all(
+    max_pages: int | None = None,
+    sleep_seconds: float | None = None,
+    stop_empty_pages: int = 3,
+) -> dict:
+    """
+    同花顺 A 股行情中心分页抓取版。
+
+    默认从 page/1/ajax/1/ 开始抓，按页递增。
+    连续 stop_empty_pages 页没有股票数据就停止。
+    """
+    max_pages = int(max_pages or os.environ.get("THS_MAX_PAGES", "300"))
+    sleep_seconds = float(sleep_seconds or os.environ.get("THS_SLEEP_SECONDS", "1.2"))
+
     fetched_at = datetime.now(ZoneInfo("Asia/Shanghai")).isoformat()
 
     result = {
         "ok": False,
-        "source": "ths_a_stock",
-        "url": target_url,
+        "source": "ths_a_stock_all_pages",
+        "url_template": BASE_URL,
         "fetched_at": fetched_at,
-        "status": None,
-        "title": "",
-        "headers": [],
+        "max_pages": max_pages,
+        "sleep_seconds": sleep_seconds,
+        "pages_fetched": 0,
+        "pages_with_data": 0,
+        "headers": DEFAULT_HEADERS,
         "count": 0,
         "stocks": [],
-        "error": "",
-        "note": "正式结构化版：解析同花顺 A 股行情中心当前页面表格。当前只抓页面直接返回的表格，不包含翻页全量。",
+        "errors": [],
+        "note": "分页版：按同花顺 A 股行情中心 ajax 页码抓取。会自动去重，连续空页后停止。",
     }
 
-    try:
-        page = Fetcher.get(
-            target_url,
-            impersonate="chrome",
-            stealthy_headers=True,
-            timeout=30,
-            retries=2,
-        )
-    except Exception as exc:
-        result["error"] = f"Fetcher.get failed: {type(exc).__name__}: {exc}"
-        return result
+    seen_codes = set()
+    empty_streak = 0
 
-    result["status"] = getattr(page, "status", None)
+    for page_no in range(1, max_pages + 1):
+        url = BASE_URL.format(page=page_no)
 
-    try:
-        title_parts = page.css("title::text").getall()
-        result["title"] = _clean_text(" ".join(title_parts))
-    except Exception:
-        result["title"] = ""
+        try:
+            page_obj = Fetcher.get(
+                url,
+                impersonate="chrome",
+                stealthy_headers=True,
+                timeout=30,
+                retries=2,
+            )
+        except Exception as exc:
+            result["errors"].append({
+                "page": page_no,
+                "url": url,
+                "error": f"{type(exc).__name__}: {exc}",
+            })
+            empty_streak += 1
+            print(f"第 {page_no} 页失败: {type(exc).__name__}: {exc}")
+            if empty_streak >= stop_empty_pages:
+                break
+            time.sleep(sleep_seconds)
+            continue
 
-    try:
-        headers, stocks = _parse_table(page)
-        result["headers"] = headers
-        result["stocks"] = stocks
-        result["count"] = len(stocks)
-    except Exception as exc:
-        result["error"] = f"parse table failed: {type(exc).__name__}: {exc}"
-        return result
+        status = getattr(page_obj, "status", None)
+        result["pages_fetched"] += 1
 
-    result["ok"] = bool(result["status"] and int(result["status"]) < 400 and result["count"] > 0)
+        if not status or int(status) >= 400:
+            result["errors"].append({
+                "page": page_no,
+                "url": url,
+                "status": status,
+                "error": "bad http status",
+            })
+            empty_streak += 1
+            print(f"第 {page_no} 页 HTTP异常: {status}")
+            if empty_streak >= stop_empty_pages:
+                break
+            time.sleep(sleep_seconds)
+            continue
+
+        try:
+            headers, records = _parse_page_table(page_obj)
+            if headers:
+                result["headers"] = headers
+        except Exception as exc:
+            result["errors"].append({
+                "page": page_no,
+                "url": url,
+                "status": status,
+                "error": f"parse failed: {type(exc).__name__}: {exc}",
+            })
+            records = []
+
+        new_records = []
+        for item in records:
+            code = item.get("code")
+            if not code or code in seen_codes:
+                continue
+            seen_codes.add(code)
+            item["page"] = page_no
+            new_records.append(item)
+
+        if new_records:
+            result["stocks"].extend(new_records)
+            result["pages_with_data"] += 1
+            empty_streak = 0
+            print(f"第 {page_no} 页：新增 {len(new_records)} 条，累计 {len(result['stocks'])} 条")
+        else:
+            empty_streak += 1
+            print(f"第 {page_no} 页：无新增数据，连续空页 {empty_streak}")
+
+        if empty_streak >= stop_empty_pages:
+            print(f"连续 {stop_empty_pages} 页无数据，停止。")
+            break
+
+        time.sleep(sleep_seconds)
+
+    result["count"] = len(result["stocks"])
+    result["ok"] = result["count"] > 0 and result["pages_with_data"] > 0
     return result
